@@ -171,7 +171,8 @@ controller, and serviceaccounts controller.`,
 			if utilfeature.DefaultFeatureGate.Enabled(cmfeatures.ControllerManagerReleaseLeaderElectionLockOnExit) {
 				ctx = server.SetupSignalContext()
 			}
-			return Run(ctx, c.Complete())
+			stopCh := server.SetupSignalHandler()
+			return Run(ctx, c.Complete(), stopCh)
 		},
 		Args: func(cmd *cobra.Command, args []string) error {
 			for _, arg := range args {
@@ -208,8 +209,9 @@ func ResyncPeriod(c *config.CompletedConfig) func() time.Duration {
 }
 
 // Run runs the KubeControllerManagerOptions.
-func Run(ctx context.Context, c *config.CompletedConfig) error {
+func Run(ctx context.Context, c *config.CompletedConfig, stopCh2 <-chan struct{}) error {
 	logger := klog.FromContext(ctx)
+	stopCh := mergeCh(ctx.Done(), stopCh2)
 
 	// To help debugging, immediately log version
 	logger.Info("Starting", "version", utilversion.Get())
@@ -277,11 +279,8 @@ func Run(ctx context.Context, c *config.CompletedConfig) error {
 		}
 
 		handler := genericcontrollermanager.BuildHandlerChain(unsecuredMux, &c.Authorization, &c.Authentication)
-		// ctx.Done() is nil for context.Background(), so derive a channel that is closed when Run returns.
-		servingCtx, cancelServingCtx := context.WithCancel(ctx)
-		defer cancelServingCtx()
 		// TODO: handle stoppedCh and listenerStoppedCh returned by c.SecureServing.Serve
-		if _, _, err := c.SecureServing.Serve(handler, 0, servingCtx.Done()); err != nil {
+		if _, _, err := c.SecureServing.Serve(handler, 0, stopCh); err != nil {
 			return err
 		}
 	}
@@ -378,16 +377,15 @@ func Run(ctx context.Context, c *config.CompletedConfig) error {
 		}
 
 		// Start lease candidate controller for coordinated leader election
-		leaseCandidate, waitForSync, err := leaderelection.NewCandidateWithConfig(leaderelection.CandidateConfig{
-			Logger:             &logger,
-			Clientset:          c.Client,
-			CandidateNamespace: "kube-system",
-			CandidateName:      id,
-			TargetLease:        kubeControllerManager,
-			BinaryVersion:      binaryVersion.FinalizeVersion(),
-			EmulationVersion:   emulationVersion.FinalizeVersion(),
-			Strategy:           coordinationv1.OldestEmulationVersion,
-		})
+		leaseCandidate, waitForSync, err := leaderelection.NewCandidate(
+			c.Client,
+			"kube-system",
+			id,
+			kubeControllerManager,
+			binaryVersion.FinalizeVersion(),
+			emulationVersion.FinalizeVersion(),
+			coordinationv1.OldestEmulationVersion,
+		)
 		if err != nil {
 			return err
 		}
@@ -436,12 +434,22 @@ func Run(ctx context.Context, c *config.CompletedConfig) error {
 					return run(ctx, controllerDescriptors)
 				}),
 				OnStoppedLeading: func() {
-					logger.Error(nil, "leaderelection lost/stopped")
-					if !utilfeature.DefaultFeatureGate.Enabled(cmfeatures.ControllerManagerReleaseLeaderElectionLockOnExit) {
-						klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+					select {
+					case <-stopCh:
+						// We were asked to terminate. Exit 0.
+						klog.Info("Requested to terminate. Exiting.")
+						if !utilfeature.DefaultFeatureGate.Enabled(cmfeatures.ControllerManagerReleaseLeaderElectionLockOnExit) {
+							os.Exit(0)
+						}
+					default:
+						// We lost the lock.
+						logger.Error(nil, "leaderelection lost/stopped")
+						if !utilfeature.DefaultFeatureGate.Enabled(cmfeatures.ControllerManagerReleaseLeaderElectionLockOnExit) {
+							klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+						}
 					}
 				},
-			})
+			}, stopCh)
 	})
 
 	// If Leader Migration is enabled, proceed to attempt the migration lock.
@@ -467,12 +475,22 @@ func Run(ctx context.Context, c *config.CompletedConfig) error {
 							return run(ctx, controllerDescriptors)
 						}),
 						OnStoppedLeading: func() {
-							logger.Error(nil, "migration leaderelection lost/stopped")
-							if !utilfeature.DefaultFeatureGate.Enabled(cmfeatures.ControllerManagerReleaseLeaderElectionLockOnExit) {
-								klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+							select {
+							case <-stopCh:
+								// We were asked to terminate. Exit 0.
+								klog.Info("Requested to terminate. Exiting.")
+								if !utilfeature.DefaultFeatureGate.Enabled(cmfeatures.ControllerManagerReleaseLeaderElectionLockOnExit) {
+									os.Exit(0)
+								}
+							default:
+								// We lost the lock.
+								logger.Error(nil, "migration leaderelection lost/stopped")
+								if !utilfeature.DefaultFeatureGate.Enabled(cmfeatures.ControllerManagerReleaseLeaderElectionLockOnExit) {
+									klog.FlushAndExit(klog.ExitFlushTimeout, 1)
+								}
 							}
 						},
-					})
+					}, stopCh)
 			})
 
 		case <-ctx.Done():
@@ -871,7 +889,7 @@ func createClientBuilders(c *config.CompletedConfig) (clientBuilder clientbuilde
 
 // leaderElectAndRun runs the leader election, and runs the callbacks once the leader lease is acquired.
 // TODO: extract this function into staging/controller-manager
-func leaderElectAndRun(ctx context.Context, c *config.CompletedConfig, lockIdentity string, electionChecker *leaderelection.HealthzAdaptor, resourceLock string, leaseName string, callbacks leaderelection.LeaderCallbacks) {
+func leaderElectAndRun(ctx context.Context, c *config.CompletedConfig, lockIdentity string, electionChecker *leaderelection.HealthzAdaptor, resourceLock string, leaseName string, callbacks leaderelection.LeaderCallbacks, stopCh <-chan struct{}) {
 	logger := klog.FromContext(ctx)
 	rl, err := resourcelock.NewFromKubeconfig(resourceLock,
 		c.ComponentConfig.Generic.LeaderElection.ResourceNamespace,
@@ -887,7 +905,13 @@ func leaderElectAndRun(ctx context.Context, c *config.CompletedConfig, lockIdent
 		klog.FlushAndExit(klog.ExitFlushTimeout, 1)
 	}
 
-	leaderelection.RunOrDie(ctx, leaderelection.LeaderElectionConfig{
+	leCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go func() {
+		<-stopCh
+		cancel()
+	}()
+	leaderelection.RunOrDie(leCtx, leaderelection.LeaderElectionConfig{
 		Lock:            rl,
 		LeaseDuration:   c.ComponentConfig.Generic.LeaderElection.LeaseDuration.Duration,
 		RenewDeadline:   c.ComponentConfig.Generic.LeaderElection.RenewDeadline.Duration,
