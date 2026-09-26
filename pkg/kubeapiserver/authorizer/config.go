@@ -35,6 +35,8 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	versionedinformers "k8s.io/client-go/informers"
 	certinformersv1 "k8s.io/client-go/informers/certificates/v1"
+	resourceinformers "k8s.io/client-go/informers/resource/v1"
+	"k8s.io/kubernetes/openshift-kube-apiserver/authorization/scopeauthorizer"
 	"k8s.io/kubernetes/pkg/auth/authorizer/abac"
 	"k8s.io/kubernetes/pkg/auth/nodeidentifier"
 	"k8s.io/kubernetes/pkg/features"
@@ -101,6 +103,10 @@ func (config Config) New(ctx context.Context, serverID string) (authorizer.Autho
 		// Keep cases in sync with constant list in k8s.io/kubernetes/pkg/kubeapiserver/authorizer/modes/modes.go.
 		switch configuredAuthorizer.Type {
 		case authzconfig.AuthorizerType(modes.ModeNode):
+			var slices resourceinformers.ResourceSliceInformer
+			if utilfeature.DefaultFeatureGate.Enabled(features.DynamicResourceAllocation) {
+				slices = config.VersionedInformerFactory.Resource().V1().ResourceSlices()
+			}
 			var podCertificateRequestInformer certinformersv1.PodCertificateRequestInformer
 			if utilfeature.DefaultFeatureGate.Enabled(features.PodCertificateRequest) {
 				podCertificateRequestInformer = config.VersionedInformerFactory.Certificates().V1().PodCertificateRequests()
@@ -108,13 +114,12 @@ func (config Config) New(ctx context.Context, serverID string) (authorizer.Autho
 			node.RegisterMetrics()
 			graph := node.NewGraph()
 			node.AddGraphEventHandlers(
-				ctx,
 				graph,
 				config.VersionedInformerFactory.Core().V1().Nodes(),
 				config.VersionedInformerFactory.Core().V1().Pods(),
 				config.VersionedInformerFactory.Core().V1().PersistentVolumes(),
 				config.VersionedInformerFactory.Storage().V1().VolumeAttachments(),
-				config.VersionedInformerFactory.Resource().V1().ResourceSlices(),
+				slices, // Nil check in AddGraphEventHandlers can be removed when always creating this.
 				podCertificateRequestInformer,
 			)
 			r.nodeAuthorizer = node.NewAuthorizer(graph, nodeidentifier.NewDefaultNodeIdentifier(), bootstrappolicy.NodeRules())
@@ -132,6 +137,9 @@ func (config Config) New(ctx context.Context, serverID string) (authorizer.Autho
 				&rbac.ClusterRoleGetter{Lister: config.VersionedInformerFactory.Rbac().V1().ClusterRoles().Lister()},
 				&rbac.ClusterRoleBindingLister{Lister: config.VersionedInformerFactory.Rbac().V1().ClusterRoleBindings().Lister()},
 			)
+		case authzconfig.AuthorizerType(modes.ModeScope):
+			// Wrap with an authorizer that detects unsafe requests and modifies verbs/resources appropriately so policy can address them separately
+			r.scopeLimitedAuthorizer = scopeauthorizer.NewAuthorizer(config.VersionedInformerFactory.Rbac().V1().ClusterRoles().Lister())
 		}
 	}
 
