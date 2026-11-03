@@ -12,7 +12,7 @@ require (
 	github.com/coreos/go-systemd/v22 v22.7.0
 	github.com/emicklei/go-restful/v3 v3.13.0
 	github.com/fsnotify/fsnotify v1.9.0
-	github.com/go-jose/go-jose/v4 v4.1.5
+	github.com/go-jose/go-jose/v4 v4.1.6
 	github.com/go-logr/logr v1.4.4
 	github.com/go-openapi/jsonreference v1.0.0
 	github.com/google/cel-go v0.29.2
@@ -23,6 +23,7 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware/providers/prometheus v1.1.0
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822
 	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f
+	github.com/openshift/library-go v0.0.0-20261030161254-298cf2d19148
 	github.com/spf13/pflag v1.0.10
 	github.com/stretchr/testify v1.12.1
 	go.etcd.io/etcd/api/v3 v3.7.2
@@ -36,6 +37,7 @@ require (
 	go.opentelemetry.io/otel/metric v1.46.0
 	go.opentelemetry.io/otel/sdk v1.46.0
 	go.opentelemetry.io/otel/trace v1.46.0
+	go.uber.org/atomic v1.12.0
 	go.uber.org/zap v1.27.1
 	golang.org/x/crypto v0.57.0
 	golang.org/x/net v0.59.0
@@ -48,15 +50,15 @@ require (
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/evanphx/json-patch.v4 v4.13.0
 	gopkg.in/natefinch/lumberjack.v2 v2.2.1
-	k8s.io/api v0.0.0
-	k8s.io/apimachinery v0.0.0
-	k8s.io/client-go v0.0.0
-	k8s.io/component-base v0.0.0
+	k8s.io/api v0.37.1
+	k8s.io/apimachinery v0.37.1
+	k8s.io/client-go v0.37.1
+	k8s.io/component-base v0.37.1
 	k8s.io/klog/v2 v2.140.0
-	k8s.io/kms v0.0.0
+	k8s.io/kms v0.37.1
 	k8s.io/kube-openapi v0.0.0-20260908163437-c4db2bdfbfe6
-	k8s.io/streaming v0.0.0
-	k8s.io/utils v0.0.0-20260626114624-be93311217bd
+	k8s.io/streaming v0.37.1
+	k8s.io/utils v0.0.0-20260707023825-cf1189d6abe3
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.37.0
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730
 	sigs.k8s.io/randfill v1.0.0
